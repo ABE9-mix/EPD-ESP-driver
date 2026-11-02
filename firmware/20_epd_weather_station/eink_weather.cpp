@@ -237,6 +237,47 @@ class ServerCallbacks : public BLEServerCallbacks {
 };
 
 // ---------- 对外接口 ----------
+//
+// 广播包里塞一个「需要同步」标志，让主机不用连接就能知道设备数据过期了。
+//
+// 为什么需要：ESP32 是 GATT 外设，不能主动找主机。设备重启后只显示 NVS 里的
+// 旧数据，而主机若正好在睡眠间隔中，就要等到下个整点才推 —— 表现就是
+// 「刚开机半天不更新」。把标志放进广播后，主机短扫描就能发现并立刻推送。
+//
+// 布局（Manufacturer Data，company id 用 0xFFFF 测试段）：
+//   [0]=0xFF [1]=0xFF  company id
+//   [2]=协议版本 0x01
+//   [3]=标志位  bit0=1 表示数据过期、请推送
+//
+static volatile bool s_needSync = true;   // 上电即置位（NVS 里是旧数据）
+static int8_t s_advApplied = -1;          // 已写入广播的标志值，-1=未应用
+
+static void advStart() {
+    BLEAdvertising *p = BLEDevice::getAdvertising();
+    int8_t want = s_needSync ? 1 : 0;
+
+    // 只有标志变化时才重建广播内容，避免每次重播都堆一次 String
+    if (s_advApplied != want) {
+        BLEAdvertisementData adv;
+        // 0x06 = LE 通用可发现 + 不支持经典蓝牙
+        adv.setFlags(0x06);
+        adv.setCompleteServices(BLEUUID(NUS_SERVICE_UUID));   // 18 字节
+        char md[4] = { (char)0xFF, (char)0xFF, 0x01, (char)want };
+        adv.setManufacturerData(String(md, sizeof(md)));      // 6 字节
+
+        // 3 + 18 + 6 = 27 字节，塞得进 31 字节广播包；
+        // 设备名放不下，会自动转到 scan response（主机扫起来仍能看到名字）
+        p->setScanResponse(true);
+        p->setMinPreferred(0x06);
+        if (!p->setAdvertisementData(adv)) {
+            Serial.println("[BLE] 设置广播数据失败（继续用旧配置）");
+        } else {
+            s_advApplied = want;
+        }
+    }
+    BLEDevice::startAdvertising();
+}
+
 void bleBegin() {
     BLEDevice::init(BLE_DEVICE_NAME);
     BLEDevice::setMTU(500);          // 争取更大 MTU，减少分片
@@ -258,15 +299,11 @@ void bleBegin() {
 
     svc->start();
 
-    BLEAdvertising *adv = BLEDevice::getAdvertising();
-    adv->addServiceUUID(NUS_SERVICE_UUID);
-    adv->setScanResponse(true);
-    adv->setMinPreferred(0x06);   // 低值优先：连接间隔更短，手机端更跟手
-    BLEDevice::startAdvertising();
+    advStart();
 
     s_lastActivity = millis();
     s_lastAdvKick = millis();
-    Serial.println("[BLE] 广播中，设备名: EPD-Weather");
+    Serial.println("[BLE] 广播中，设备名: EPD-Weather（广告含 need_sync=1）");
 }
 
 void bleLoop() {
@@ -284,7 +321,7 @@ void bleLoop() {
         } else if (millis() - s_restartAt > 300) {
             s_restartAt = 0;
             s_needRestartAdv = false;
-            BLEDevice::startAdvertising();
+            advStart();
             s_lastAdvKick = millis();
             Serial.println("[BLE] 已重新广播");
         }
@@ -296,7 +333,7 @@ void bleLoop() {
     // 这里每 5 秒无条件补一次广播请求；已经在广播时该调用是幂等的，无副作用。
     if (!s_connected && millis() - s_lastAdvKick > 5000UL) {
         s_lastAdvKick = millis();
-        BLEDevice::startAdvertising();
+        advStart();
     }
 }
 
@@ -330,6 +367,9 @@ void bleMarkSynced(const char *whenStr) {
     }
     s_lastSyncMs = millis();
     s_syncOnConnect = false;    // 这次连上已经同步过了
+    // 数据已落地：清掉广播里的「需要同步」标志，
+    // 下次重播（断开后）主机会看到 need_sync=0，不再重复推。
+    s_needSync = false;
 }
 
 bool bleWantsSync(unsigned long maxAgeMs) {

@@ -39,6 +39,14 @@ NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 DEVICE_NAME = "EPD-Weather"
 
+# 固件在广播包 Manufacturer Data 里塞的状态标志（company id 用 0xFFFF 测试段）
+#   [0]=0xFF [1]=0xFF  company id
+#   [2]=协议版本 0x01
+#   [3]=标志位  bit0=1 表示数据过期、请推送
+MANUF_ID = 0xFFFF
+MANUF_VER = 0x01
+FLAG_NEED_SYNC = 0x01
+
 GEO_URL = "https://geocoding-api.open-meteo.com/v1/search"
 WX_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -81,7 +89,7 @@ STATE_PATH = BASE_DIR / "state.json"
 DEFAULT_CONFIG = {
     "city": "Hangzhou",
     "language": "zh",
-    "interval_minutes": 60,
+    "interval_minutes": 15,
     "device_name": DEVICE_NAME,
     "device_address": "",
     "scan_timeout_s": 12.0,
@@ -89,7 +97,10 @@ DEFAULT_CONFIG = {
     "retry_backoff_s": [30, 60, 120, 300, 600],
     "log_level": "INFO",
     "only_when_changed": True,
-    "startup_delay_s": 8,
+    "startup_delay_s": 3,
+    "idle_poll_s": 60.0,
+    "probe_timeout_s": 3.0,
+    "refresh_grace_s": 25.0,
 }
 
 log = logging.getLogger("epd")
@@ -317,6 +328,8 @@ class BleSync:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._wake = threading.Event()
+        self._force_next = False
+        self._skip_polls = 0
 
         st = load_state()
         if st.get("last_payload"):
@@ -345,6 +358,11 @@ class BleSync:
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
             self._thread.join(timeout=10)
+
+    def request_sync_now(self) -> None:
+        """外部立刻触发一次（不等待下一轮探测）。"""
+        self._force_next = True
+        self._wake.set()
 
     # -------------------------- 设备发现
 
@@ -414,9 +432,109 @@ class BleSync:
         except Exception as e:
             log.debug("写地址失败：%s", e)
 
+    # -------------------------- 广播探测（低成本）
+    #
+    # 不做连接、只收广播，因此耗电极低（一次 3 秒扫描）。
+    # 关键是能读到固件广播的 need_sync 标志：设备一重启就置 1，
+    # 主机看到就立刻推数据，不用等整点 —— 这是"刚开机就能收到"的核心。
+
+    async def probe(self, timeout: float) -> tuple[bool, bool | None]:
+        """短扫描。
+
+        返回 (present, needs_sync)：
+          present=False    设备没在广播（没上电 / 被别的设备连着）
+          needs_sync=True  设备说数据过期（刚开机），应立即推送
+          needs_sync=False 设备数据是新的
+          needs_sync=None  老固件没有这个标志，按时间判断
+        """
+        name = self.cfg.get("device_name") or DEVICE_NAME
+        addr = (self.cfg.get("device_address") or "").strip()
+        state: dict = {"dev": None, "needs": None}
+
+        def _cb(dev, adv):
+            nm = (adv.local_name or dev.name or "").strip()
+            uuids = [str(u).lower() for u in (adv.service_uuids or [])]
+            hit = (nm == name) or any(NUS_SERVICE in u for u in uuids)
+            # 有固定地址时也认地址，避免设备改名后失联
+            if not hit and addr and dev.address.upper() == addr.upper():
+                hit = True
+            if not hit:
+                return
+            md = (adv.manufacturer_data or {}).get(MANUF_ID)
+            needs = None
+            if md and len(md) >= 2 and md[0] == MANUF_VER:
+                needs = bool(md[1] & FLAG_NEED_SYNC)
+            state["dev"] = dev
+            state["needs"] = needs
+
+        scanner = BleakScanner(detection_callback=_cb)
+        await scanner.start()
+        try:
+            await asyncio.sleep(timeout)
+        finally:
+            await scanner.stop()
+
+        dev = state["dev"]
+        if dev is not None:
+            # 记住地址：之后同步可直接连，省掉一次 12 秒扫描
+            if not addr or addr.upper() != dev.address.upper():
+                self.cfg["device_address"] = dev.address
+                self._remember_address(dev.address)
+            log.debug("探测到设备 %s，need_sync=%s", dev.address, state["needs"])
+            return True, state["needs"]
+        return False, None
+
+    async def _tick(self, interval: float, probe_to: float) -> str:
+        """一次巡检。返回 'sync' / 'skip' / 'absent' / 'fail'。
+
+        'absent' 单独区分：设备没在广播是常态（关机、被手机连着），
+        不该按失败计入退避，否则日志会一直报错。
+        """
+        forced = self._force_next
+        self._force_next = False
+
+        if forced:
+            log.info("手动触发 → 直接同步")
+            return "sync" if await self.sync_once(force=True) else "fail"
+
+        present, needs = await self.probe(probe_to)
+        if not present:
+            log.info("设备不在广播（没上电 / 被其它设备连着 / 刚断开还未重新广播）")
+            return "absent"
+
+        age = (time.time() - self.stats.last_ok_ts) if self.stats.last_ok_ts else 1e18
+
+        if needs is True:
+            log.info("设备广播 need_sync=1（刚开机 / 数据过期）→ 立即推送")
+            return "sync" if await self.sync_once(force=True) else "fail"
+
+        if needs is None:
+            log.debug("设备未提供 need_sync 标志（老固件），按时间判断")
+
+        if age >= interval:
+            log.info("距上次同步 %.0f 分钟 ≥ %.0f 分钟 → 正常刷新",
+                     age / 60.0, interval / 60.0)
+            return "sync" if await self.sync_once() else "fail"
+
+        # 跳过时不刷日志（每分钟一次会淹没日志），但每 10 轮打个心跳，
+        # 让人能确认服务还活着。
+        self._skip_polls += 1
+        if self._skip_polls % 10 == 0:
+            log.info("设备在线，数据新鲜（%.0f 分钟前同步），已跳过 %d 轮",
+                     age / 60.0, self._skip_polls)
+        else:
+            log.debug("设备在线且数据新鲜（%.0f 分钟前同步），本轮跳过", age / 60.0)
+        return "skip"
+
     # -------------------------- 主流程
 
-    async def sync_once(self) -> bool:
+    async def sync_once(self, force: bool = False) -> bool:
+        """取天气并推送。
+
+        force=True 时跳过"天气无变化就不写屏"的判断 —— 用于设备刚开机、
+        屏幕上是 NVS 旧数据的情形：哪怕内容一样也必须写一次，
+        否则设备广播里的 need_sync 标志永远清不掉，会反复触发。
+        """
         self.stats.attempts += 1
         try:
             payload = await asyncio.to_thread(self._build_payload_sync)
@@ -424,7 +542,7 @@ class BleSync:
             self._on_fail(f"取天气失败：{e}")
             return False
 
-        if self.cfg.get("only_when_changed", True):
+        if not force and self.cfg.get("only_when_changed", True):
             a = {k: v for k, v in (self.stats.last_payload or {}).items() if k != "epoch"}
             b = {k: v for k, v in payload.items() if k != "epoch"}
             if a and a == b:
@@ -433,6 +551,8 @@ class BleSync:
                 self.stats.consecutive_fail = 0
                 self._persist()
                 return True
+        elif force:
+            log.info("设备请求同步（刚开机/数据过期）→ 强制写一次，忽略去重")
 
         ok = await self._push(payload)
         if ok:
@@ -524,27 +644,48 @@ class BleSync:
     # -------------------------- 长期运行
 
     async def run_forever(self) -> None:
-        log.info("服务启动：城市=%s 间隔=%s 分钟",
-                 self.cfg.get("city"), self.cfg.get("interval_minutes"))
+        """主循环：短扫描探测 → 需要才同步。
+
+        调度逻辑（取代原来的"固定睡 N 分钟再同步一次"）：
+          每 idle_poll_s（默认 60s）做一次 3 秒广播探测：
+            · 读不到设备            → 退避后重试
+            · 设备广播 need_sync    → 立刻推送（设备刚开机就是这个情形）
+            · 距上次同步 ≥ interval → 正常刷新
+            · 否则                  → 什么都不做（不连接，不耗电）
+        """
+        interval = float(self.cfg.get("interval_minutes", 15)) * 60.0
+        poll = max(15.0, float(self.cfg.get("idle_poll_s", 60.0)))
+        probe_to = float(self.cfg.get("probe_timeout_s", 3.0))
         backoff = list(self.cfg.get("retry_backoff_s") or [30, 60, 120, 300, 600])
 
-        delay0 = float(self.cfg.get("startup_delay_s", 8))
+        log.info("服务启动：城市=%s｜常规刷新 %.0f 分钟｜空闲每 %.0f 秒探测一次",
+                 self.cfg.get("city"), interval / 60.0, poll)
+
+        delay0 = float(self.cfg.get("startup_delay_s", 3))
         if delay0 > 0:
             log.info("启动等待 %.0f 秒…", delay0)
             await asyncio.sleep(delay0)
 
+        # 启动后先同步一次（不受"距上次多久"限制）：
+        # 保证电脑刚开机、或服务被重启后，屏幕上立刻是当前天气。
+        # 仍然尊重 only_when_changed —— 天气没变就不白刷一次墨水屏。
+        log.info("启动首次同步…")
+        await self.sync_once()
+
+        # 墨水屏刷一次要 15~20 秒，这期间固件主循环被占住、来不及重新广播。
+        # 等它刷完再开始探测，免得第一轮扑空。
+        await asyncio.sleep(float(self.cfg.get("refresh_grace_s", 25.0)))
+
         while not self._stop.is_set():
-            ok = await self.sync_once()
+            result = await self._tick(interval, probe_to)
 
-            if ok:
-                delay = float(self.cfg.get("interval_minutes", 60)) * 60.0
-                log.info("下次同步在 %.0f 分钟后", delay / 60.0)
-            else:
+            if result == "fail":
                 idx = min(max(self.stats.consecutive_fail - 1, 0), len(backoff) - 1)
-                delay = float(backoff[idx])
-                log.info("失败退避：%.0f 秒后重试", delay)
-
-            end = time.monotonic() + delay
+                wait = float(backoff[idx])
+                log.info("本轮失败，%.0f 秒后重试", wait)
+            else:
+                wait = poll
+            end = time.monotonic() + wait
             while time.monotonic() < end and not self._stop.is_set():
                 if self._wake.is_set():
                     self._wake.clear()
@@ -604,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         async def _once():
-            return await sync.sync_once()
+            return await sync.sync_once(force=True)
         ok = asyncio.run(_once())
         log.info("单次同步结束：%s", "成功" if ok else "失败")
         return 0 if ok else 1
