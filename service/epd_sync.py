@@ -502,7 +502,9 @@ class BleSync:
             log.info("设备不在广播（没上电 / 被其它设备连着 / 刚断开还未重新广播）")
             return "absent"
 
-        age = (time.time() - self.stats.last_ok_ts) if self.stats.last_ok_ts else 1e18
+        # 没有历史记录时用 None 表示"从未同步"，不要拿 1e18 去算，
+        # 否则日志会打出 16666666666666666 这种天文数字。
+        age = (time.time() - self.stats.last_ok_ts) if self.stats.last_ok_ts else None
 
         if needs is True:
             log.info("设备广播 need_sync=1（刚开机 / 数据过期）→ 立即推送")
@@ -510,6 +512,10 @@ class BleSync:
 
         if needs is None:
             log.debug("设备未提供 need_sync 标志（老固件），按时间判断")
+
+        if age is None:
+            log.info("本机还没有同步记录 → 立即刷新")
+            return "sync" if await self.sync_once() else "fail"
 
         if age >= interval:
             log.info("距上次同步 %.0f 分钟 ≥ %.0f 分钟 → 正常刷新",
