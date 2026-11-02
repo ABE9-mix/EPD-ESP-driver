@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" shape-rendering="crispEdges">
+  <!-- 晴：红色实心太阳 + 黑色光芒 -->
+  <g stroke="#000000" stroke-width="2" stroke-linecap="round">
+    <line x1="15" y1="2.5" x2="15" y2="5"/>
+    <line x1="15" y1="25" x2="15" y2="27.5"/>
+    <line x1="2.5" y1="15" x2="5" y2="15"/>
+    <line x1="25" y1="15" x2="27.5" y2="15"/>
+    <line x1="6.2" y1="6.2" x2="8" y2="8"/>
+    <line x1="22" y1="22" x2="23.8" y2="23.8"/>
+    <line x1="6.2" y1="23.8" x2="8" y2="22"/>
+    <line x1="22" y1="8" x2="23.8" y2="6.2"/>
+  </g>
+  <circle cx="15" cy="15" r="6.5" fill="#E00000"/>
+</svg>

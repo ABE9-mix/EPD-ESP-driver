@@ -47,7 +47,6 @@ void drawTimeText(int x, int y, const char *s, int color);
 int  timeTextWidth(const char *s);
 
 void drawWeatherScene(const char *tempStr, int code,
-                      const char *uvStr,
                       const char *advice1, const char *advice2, const char *advice3,
                       const char *forecastStr,
                       const char *timeStr,

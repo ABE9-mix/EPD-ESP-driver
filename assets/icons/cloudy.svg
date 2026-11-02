@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" shape-rendering="crispEdges">
+  <!-- 阴：纯黑实心云 -->
+  <g fill="#000000">
+    <circle cx="10" cy="16" r="5.5"/>
+    <circle cx="16.5" cy="13" r="6.8"/>
+    <circle cx="23" cy="16.5" r="5"/>
+    <rect x="4.5" y="16" width="20.5" height="5.5"/>
+  </g>
+</svg>

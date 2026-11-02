@@ -4,6 +4,7 @@
 #include "epd_layout.h"
 #include "font_zh12.h"
 #include "font_time10.h"
+#include "icons.h"
 
 // ---------------- UTF-8 解码 ----------------
 // 返回解码出的码位，并前移指针
@@ -116,51 +117,67 @@ int zhTextWidth(const char *utf8) {
 }
 
 // ============================================================
-// 天气图标（左侧，约 36x36 区域）
-// 直接画基本几何图形，不依赖字库
+// 天气图标 —— 双色面性点阵（由 tools/gen_icons.py 从 SVG 生成）
+//
+// 源文件在 assets/icons/*.svg，改完重跑 gen_icons.py 即可。
+// 每个图标 30x30，分「黑 / 红」两层位图；红色是强调色，
+// 用来画太阳、雨滴、雪点、闪电。
 // ============================================================
+
+// 天气代码 → 图标 id（与 gen_icons.py 的分组保持一致）
+// 雨分两档：小雨(4) / 大雨(5)，按降水量级区分
+static uint8_t iconIdFor(int code) {
+    switch (code) {
+        case 113: return 0;                                  // 晴
+        case 116: return 1;                                  // 局部多云
+        case 119: case 122: return 2;                        // 阴 / 非常阴
+        case 143: case 248: case 260: return 3;              // 雾 / 大雾
+        // 雷暴（含雷阵雨、雷阵雪）
+        case 200: case 386: case 389: case 392: case 395: return 7;
+        // 各类雪
+        case 179: case 227: case 230:
+        case 323: case 326: case 329: case 332: case 335: case 338:
+        case 368: case 371: return 6;
+        // 大雨 / 中雨 / 大阵雨 / 冰雹
+        case 299: case 302: case 305: case 308:
+        case 350: case 356: case 359: case 374: case 377: return 5;
+        // 小雨 / 细雨 / 冻雨 / 雨夹雪 / 阵雨
+        case 176: case 182: case 185:
+        case 263: case 266: case 293: case 296:
+        case 311: case 314: case 317: case 320:
+        case 353: case 362: case 365: return 4;
+        default: return 4;                                   // 其余按小雨
+    }
+}
+
+// 图标下方显示的当前天气文字（顺序与 icons.h 的 id 一一对应）
+// 注：fog 用「霾」——「雾」在方舟像素 12px 子集里是缺字方框
+static const char *const ICON_LABEL[ICON_COUNT] = {
+    "晴", "多云", "阴", "霾", "小雨", "大雨", "雪", "雷阵雨"
+};
+
 static void drawIcon(int cx, int cy, int code, int color) {
-    // 晴
-    if (code == 113) {
-        drawCircle(cx, cy, 9, color, false);
-        for (int a = 0; a < 360; a += 45) {
-            float rad = a * 3.14159f / 180.0f;
-            int ox = cx + (int)(cosf(rad) * 13);
-            int oy = cy + (int)(sinf(rad) * 13);
-            drawLine(cx + (int)(cosf(rad) * 11), cy + (int)(sinf(rad) * 11), ox, oy, color);
+    (void)color;   // 双色图标自带配色，不再需要外部颜色
+    uint8_t id = iconIdFor(code);
+
+    const WeatherIcon *ic = nullptr;
+    for (int i = 0; i < ICON_COUNT; i++) {
+        if (pgm_read_byte(&ICONS[i].id) == id) { ic = &ICONS[i]; break; }
+    }
+    if (!ic) return;
+
+    int x0 = cx - ICON_W / 2;
+    int y0 = cy - ICON_H / 2;
+    for (int row = 0; row < ICON_H; row++) {
+        uint32_t bl = pgm_read_dword(&ic->black[row]);
+        uint32_t rd = pgm_read_dword(&ic->red[row]);
+        if (!bl && !rd) continue;
+        for (int col = 0; col < ICON_W; col++) {
+            uint32_t bit = 1u << (ICON_W - 1 - col);
+            if (rd & bit)      setPx(x0 + col, y0 + row, 2);   // 红
+            else if (bl & bit) setPx(x0 + col, y0 + row, 1);   // 黑
         }
-        return;
     }
-    // 雾
-    if (code == 143 || code == 248 || code == 260) {
-        for (int i = 0; i < 4; i++)
-            drawLine(cx - 14, cy - 7 + i * 5, cx + 14, cy - 7 + i * 5, color);
-        return;
-    }
-    // 雪
-    bool snow = (code >= 323 && code <= 338) || (code >= 368 && code <= 371);
-    // 雨/雷/雪：云 + 下坠
-    bool rain = (code >= 176 && code <= 200) || (code >= 263 && code <= 308) ||
-                (code >= 353 && code <= 359);
-    if (rain || snow) {
-        // 云
-        drawCircle(cx - 6, cy - 4, 7, color, false);
-        drawCircle(cx + 4, cy - 6, 8, color, false);
-        drawCircle(cx + 11, cy - 2, 6, color, false);
-        drawLine(cx - 13, cy + 1, cx + 15, cy + 1, color);
-        // 下落物
-        for (int i = 0; i < 4; i++) {
-            int rx = cx - 9 + i * 6;
-            if (snow) drawCircle(rx, cy + 8, 1, color, true);
-            else      drawLine(rx, cy + 6, rx - 1, cy + 11, color);
-        }
-        return;
-    }
-    // 多云 / 阴 / 默认
-    drawCircle(cx - 6, cy - 2, 7, color, false);
-    drawCircle(cx + 4, cy - 5, 8, color, false);
-    drawCircle(cx + 11, cy, 6, color, false);
-    drawLine(cx - 13, cy + 4, cx + 15, cy + 4, color);
 }
 
 // ============================================================
@@ -234,11 +251,11 @@ int timeTextWidth(const char *s) {
 //     y=82   温度区间（左）/ 明日预告（右）—— 底行左右对齐
 // ============================================================
 void drawWeatherScene(const char *tempStr, int code,
-                      const char *uvStr,
                       const char *advice1, const char *advice2, const char *advice3,
                       const char *forecastStr,
                       const char *timeStr,
                       const char *tlowStr, const char *thighStr) {
+    (void)advice3;   // 当前布局只用 2 行建议，保留参数以便扩展
     // ---------- 分隔线（点状，y=6..98）----------
     for (int y = 6; y < 98; y += 4) {
         setPx(COL_SPLIT_X - 1, y, 1);
@@ -263,12 +280,13 @@ void drawWeatherScene(const char *tempStr, int code,
     // ---------- 左栏：图标（水平居中）----------
     drawIcon(LEFT_CX, 18, code, 1);
 
-    // ---------- 左栏：紫外线 ----------
+    // ---------- 左栏：当前天气文字（替代原来的 UV 数字）----------
+    // UV 等级不再单独显示，已由右栏建议体现（紫外线强 / 注意防晒）
     {
-        char uvBuf[12];
-        snprintf(uvBuf, sizeof(uvBuf), "UV%s", (uvStr && uvStr[0]) ? uvStr : "-");
-        int w = zhTextWidth(uvBuf);
-        drawZhText(LEFT_CX - w / 2, 38, uvBuf, 1);
+        uint8_t iid = iconIdFor(code);
+        const char *label = (iid < ICON_COUNT) ? ICON_LABEL[iid] : "";
+        int lw = zhTextWidth(label);
+        drawZhText(LEFT_CX - lw / 2, 38, label, 1);
     }
 
     // ---------- 左栏：温度 24px（12px × 2，含 °C，居中）----------

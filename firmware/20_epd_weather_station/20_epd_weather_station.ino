@@ -712,9 +712,8 @@ void displayWeather() {
   char tempBuf[12];
   snprintf(tempBuf, sizeof(tempBuf), "%s", weather_temp);
 
-  // UV 字符串
-  char uvBuf[8];
-  snprintf(uvBuf, sizeof(uvBuf), "%s", weather_uv);
+  // 注意：UV 数字不再单独显示（左栏改显示天气文字），
+  // UV 等级由右栏建议体现（"紫外线强 / 注意防晒"）
 
   // 右上角"最新更新时间"：24 小时制到分（仅数字与冒号，走 10px 字库）
   char timeBuf[8];
@@ -754,7 +753,6 @@ void displayWeather() {
   drawWeatherScene(
       tempBuf,
       weather_code,
-      uvBuf,
       advice_line1,
       advice_line2,
       advice_line3,

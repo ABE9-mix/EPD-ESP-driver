@@ -53,12 +53,32 @@ FORECAST_PREFIX = "明日"
 # 连接符（ASCII，已在字库内）
 DASH = "~"
 
+# ---------------------------------------------------------------- 天气标签
+# 左栏图标下方显示的当前天气（替代原来的 UV 数字）。
+# 顺序必须与固件 iconIdFor() / icons.h 的 id 完全一致：
+#   0 晴 / 1 多云 / 2 阴 / 3 雾 / 4 小雨 / 5 大雨 / 6 雪 / 7 雷阵雨
+# 这些字会被 gen_font.py 一并收进字库，保证不会出现方框。
+WEATHER_LABEL = [
+    "晴",      # 0 sunny
+    "多云",    # 1 partly
+    "阴",      # 2 cloudy
+    # 注意：不能用「雾」——方舟像素 12px 的 zh_hans 子集里该码位是缺字方框，
+    # 实测「霾」可用，故雾天显示「霾」。
+    "霾",      # 3 fog
+    "小雨",    # 4 rain_light
+    "大雨",    # 5 rain_heavy
+    "雪",      # 6 snow
+    "雷阵雨",  # 7 thunder  (3 字 = 36px，左栏 80px 放得下)
+]
+
 
 def _chars() -> set:
     """收集所有会用到的字符（含数字 0-9、ASCII 常用符号）。"""
     s = set()
     for tpl in PHRASES.values():
         s.update(tpl)
+    for label in WEATHER_LABEL:
+        s.update(label)
     s.update(FORECAST_PREFIX)
     s.update(DASH)
     s.update("0123456789")

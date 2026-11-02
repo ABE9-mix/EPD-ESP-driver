@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" shape-rendering="crispEdges">
+  <!-- 雷暴：黑云 + 红色闪电 -->
+  <g fill="#000000">
+    <circle cx="11" cy="11" r="4.8"/>
+    <circle cx="17" cy="8.5" r="5.8"/>
+    <circle cx="22.5" cy="11.5" r="4.4"/>
+    <rect x="6.5" y="11" width="17.5" height="4.5"/>
+  </g>
+  <path d="M16 17 L11 24 L14.5 24 L12.5 29 L19 21.5 L15 21.5 Z" fill="#E00000"/>
+</svg>

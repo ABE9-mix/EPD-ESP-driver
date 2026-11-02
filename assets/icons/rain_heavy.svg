@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" shape-rendering="crispEdges">
+  <!-- 大雨：黑云 + 四条更长的粗雨滴（密度和长度都与小雨拉开差别） -->
+  <g fill="#000000">
+    <circle cx="11" cy="12" r="4.8"/>
+    <circle cx="17" cy="9.5" r="5.8"/>
+    <circle cx="22.5" cy="12.5" r="4.4"/>
+    <rect x="6.5" y="12" width="17.5" height="4.5"/>
+  </g>
+  <g stroke="#E00000" stroke-width="2.2" stroke-linecap="round">
+    <line x1="9"    y1="20.5" x2="7.4"  y2="28"/>
+    <line x1="14"   y1="20.5" x2="12.4" y2="28"/>
+    <line x1="19"   y1="20.5" x2="17.4" y2="28"/>
+    <line x1="24"   y1="20.5" x2="22.4" y2="28"/>
+  </g>
+</svg>
