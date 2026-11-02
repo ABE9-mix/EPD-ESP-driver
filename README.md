@@ -145,9 +145,8 @@ SYSTEM 服务跑在 Session 0，枚举不到蓝牙设备，扫描直接失败。
 
 ## 五、手机端（可选）
 
-仓库另外维护了一个 **Web Bluetooth 网页**（在 `EPD-BLE-SYNC` 仓库），
+仓库另外维护了一个 **Web Bluetooth 网页**（在 [EPD-BLE-SYNC](https://github.com/ABE9-mix/EPD-BLE-SYNC) 仓库），
 手机 Chrome 打开即可推送天气，无需安装。
-
 | | 电脑服务 | 手机网页 |
 |---|---|---|
 | 自动同步 | ✅ 开机常驻 | ⚠️ 页面要保持后台 |

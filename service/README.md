@@ -177,7 +177,7 @@ service/
 
 ## 八、手机端替代方案
 
-不方便常开电脑时，可用仓库 **`EPD-BLE-SYNC`** 里的 Web Bluetooth 网页：
+不方便常开电脑时，可用 [EPD-BLE-SYNC](https://github.com/ABE9-mix/EPD-BLE-SYNC) 仓库里的 Web Bluetooth 网页：
 手机 Chrome 打开即用，无需安装。
 
 | | 电脑服务 | 手机网页 |
