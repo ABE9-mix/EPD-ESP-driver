@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 运行时产物（不入库）
+service/logs/
+service/state.json
+service/config.json
+
+# 预览输出
+preview/
+
+# 字体压缩包（仓库只保留解压后的 ttf）
+assets/*.zip
+
+# 编辑器/系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

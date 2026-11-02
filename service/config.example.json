@@ -1,0 +1,13 @@
+{
+  "city": "Hangzhou",
+  "language": "zh",
+  "interval_minutes": 60,
+  "device_name": "EPD-Weather",
+  "device_address": "",
+  "scan_timeout_s": 12.0,
+  "connect_timeout_s": 25.0,
+  "retry_backoff_s": [30, 60, 120, 300, 600],
+  "log_level": "INFO",
+  "only_when_changed": true,
+  "startup_delay_s": 8
+}
