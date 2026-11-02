@@ -716,6 +716,23 @@ void displayWeather() {
   char uvBuf[8];
   snprintf(uvBuf, sizeof(uvBuf), "%s", weather_uv);
 
+  // 右上角"最新更新时间"：24 小时制到分（仅数字与冒号，走 10px 字库）
+  char timeBuf[8];
+  timeBuf[0] = 0;
+  if (time_synced) {
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", current_hour, current_min);
+  }
+
+  // 今日温度区间：低 / 高（布局层把"高"染红）
+  char lowBuf[8], highBuf[8];
+  lowBuf[0] = 0; highBuf[0] = 0;
+  if (weather_tlow[0] && strcmp(weather_tlow, "--") != 0) {
+    snprintf(lowBuf, sizeof(lowBuf), "%s", weather_tlow);
+  }
+  if (weather_thigh[0] && strcmp(weather_thigh, "--") != 0) {
+    snprintf(highBuf, sizeof(highBuf), "%s", weather_thigh);
+  }
+
   // 中文建议：由 advice 模块提前算好并存在全局里
   // （BLE 写入时已算过一次；这里直接用）
   // 明日预告：**整个字符串在这里拼好（含"明日"前缀）**，
@@ -741,7 +758,10 @@ void displayWeather() {
       advice_line1,
       advice_line2,
       advice_line3,
-      fcBuf);
+      fcBuf,
+      timeBuf,
+      lowBuf,
+      highBuf);
 
   // 旋转并刷新
   rotate90();

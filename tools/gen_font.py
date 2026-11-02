@@ -29,6 +29,12 @@ FONT_PATH = REPO / "assets" / "ark12" / "ark-pixel-12px-monospaced-zh_hans.ms.bi
 FW_DIR = REPO / "firmware" / "20_epd_weather_station"
 OUT_PATH = FW_DIR / "font_zh12.h"
 
+# ---- 10px 时间字库（右上角"最新更新时间"用，只需数字与冒号）----
+FONT10_PATH = REPO / "assets" / "ark10" / "ark-pixel-10px-monospaced-latin.ms.bitmap.ttf"
+OUT_TIME = FW_DIR / "font_time10.h"
+TIME_CHARS = "0123456789:"
+TIME_CELL = 10      # 10x10 格，ASCII 实际占左 5 列
+
 # 12px 方舟像素：汉字 12x12，ASCII 半宽 6x10（等宽版英文是整个 12 格里的左 6 格）
 CELL_W = 12
 CELL_H = 12
@@ -73,6 +79,66 @@ def render_char(font: ImageFont.FreeTypeFont, ch: str) -> tuple[int, list[int]]:
                 bits |= 1 << (CELL_W - 1 - x)
         rows.append(bits)
     return w, rows
+
+
+def gen_time_font() -> int:
+    """生成 10px 时间字库（只含 0-9 与冒号，共 11 个字）。
+
+    右上角的"最新更新时间"用 10px，比正文小一档，只占约 25px 宽。
+    """
+    if not FONT10_PATH.exists():
+        print(f"10px 字体不存在: {FONT10_PATH}", file=sys.stderr)
+        return 1
+
+    font = ImageFont.truetype(str(FONT10_PATH), TIME_CELL)
+    entries = []
+    for ch in TIME_CHARS:
+        img = Image.new("1", (TIME_CELL, TIME_CELL), 0)
+        d = ImageDraw.Draw(img)
+        # 10px 字体里数字的 bbox 约 (0,2)-(5,9)，直接画在 (0,0) 即落在格内
+        d.text((0, 0), ch, font=font, fill=1)
+        rows = []
+        for y in range(TIME_CELL):
+            bits = 0
+            for x in range(TIME_CELL):
+                if img.getpixel((x, y)):
+                    bits |= 1 << (TIME_CELL - 1 - x)
+            rows.append(bits)
+        entries.append((ch, rows))
+
+    lines = []
+    lines.append("// 由 gen_font.py 自动生成，请勿手改")
+    lines.append("// 字体: 方舟像素 10px (Ark Pixel Font, OFL-1.1) —— 仅数字与冒号")
+    lines.append(f"// 字符数: {len(entries)}  单字 {TIME_CELL}x{TIME_CELL}")
+    lines.append("#pragma once")
+    lines.append("#include <Arduino.h>")
+    lines.append("")
+    lines.append(f"#define TIME_CELL_W {TIME_CELL}")
+    lines.append(f"#define TIME_CELL_H {TIME_CELL}")
+    lines.append(f"#define TIME_COUNT {len(entries)}")
+    lines.append("")
+    lines.append("struct TimeGlyph {")
+    lines.append("  uint8_t cp;                       // 字符本身 ('0'-'9' / ':')")
+    lines.append("  uint8_t bits[TIME_CELL_H * 2];    // 每行 2 字节，高位在前")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const TimeGlyph TIME_GLYPHS[TIME_COUNT] PROGMEM = {")
+    for ch, rows in entries:
+        bs = ",".join(f"0x{(r >> 8) & 0xFF:02X},0x{r & 0xFF:02X}" for r in rows)
+        lines.append(f"  {{'{ch}', {{{bs}}}}},   // {ch}")
+    lines.append("};")
+    lines.append("")
+    lines.append("// 等宽 5px：查不到就退回 5")
+    lines.append("static inline uint8_t timeGlyphWidth(char c) {")
+    lines.append("  (void)c;")
+    lines.append("  return 5;")
+    lines.append("}")
+    lines.append("")
+
+    OUT_TIME.write_text("\n".join(lines), encoding="utf-8")
+    print(f"已生成: {OUT_TIME}")
+    print(f"字符数: {len(entries)}  (10px 时间字库)")
+    return 0
 
 
 def main() -> int:
@@ -137,7 +203,10 @@ def main() -> int:
     OUT_PATH.write_text("\n".join(lines), encoding="utf-8")
     print(f"已生成: {OUT_PATH}")
     print(f"字符数: {len(entries)}  数据: {total_bytes} 字节 ({total_bytes/1024:.1f} KB)")
-    return 0
+    print()
+
+    rc = gen_time_font()
+    return rc
 
 
 if __name__ == "__main__":

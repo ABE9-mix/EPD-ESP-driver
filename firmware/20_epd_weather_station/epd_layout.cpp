@@ -3,6 +3,7 @@
 // ============================================================
 #include "epd_layout.h"
 #include "font_zh12.h"
+#include "font_time10.h"
 
 // ---------------- UTF-8 解码 ----------------
 // 返回解码出的码位，并前移指针
@@ -163,39 +164,111 @@ static void drawIcon(int cx, int cy, int code, int color) {
 }
 
 // ============================================================
+// 圆角矩形填充
+// 像素风做法：四个角按 45° 逐行收进，r=2/3 时视觉上就是干净的圆角，
+// 不必做真圆计算（在 2~3px 尺度上没有区别，还省 flash）。
+// ============================================================
+void fillRoundRect(int x, int y, int w, int h, int r, int color) {
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    for (int row = 0; row < h; row++) {
+        int dtop = row;
+        int dbot = h - 1 - row;
+        int d = (dtop < dbot) ? dtop : dbot;
+        int inset = (d < r) ? (r - d) : 0;
+        int span = w - 2 * inset;
+        if (span > 0) fillRect(x + inset, y + row, span, 1, color);
+    }
+}
+
+// ============================================================
+// 10px 时间数字（0-9 与冒号）
+// ============================================================
+void drawTimeText(int x, int y, const char *s, int color) {
+    if (!s) return;
+    int cx = x;
+    while (*s) {
+        char c = *s++;
+        const TimeGlyph *g = nullptr;
+        for (int i = 0; i < TIME_COUNT; i++) {
+            if ((char)pgm_read_byte(&TIME_GLYPHS[i].cp) == c) {
+                g = &TIME_GLYPHS[i];
+                break;
+            }
+        }
+        if (g) {
+            for (int row = 0; row < TIME_CELL_H; row++) {
+                uint16_t bits = ((uint16_t)pgm_read_byte(&g->bits[row * 2]) << 8)
+                              | pgm_read_byte(&g->bits[row * 2 + 1]);
+                if (!bits) continue;
+                for (int col = 0; col < TIME_CELL_W; col++) {
+                    if (bits & (1 << (TIME_CELL_W - 1 - col))) {
+                        setPx(cx + col, y + row, color);
+                    }
+                }
+            }
+        }
+        cx += 5;   // 10px 字体 ASCII 步进 = 5px
+    }
+}
+
+int timeTextWidth(const char *s) {
+    return s ? (int)strlen(s) * 5 : 0;
+}
+
+// ============================================================
 // 主绘制：双栏
 //
-// 左栏（x 0..79）：
-//     图标 (cx=22, cy=26)      UV 数值（右上角）
-//     温度大字（下方居中）
-// 右栏（x 84..211）：
-//     3 行中文建议 + 1 行明日预告
-// 分隔：竖直虚线，不占满全高，留呼吸感
-// ============================================================
+// 左栏（x 0..79）：图标 → 紫外线 → 温度24px → 温度区间12px
+// 右栏（x 84..211）：右上角更新时间 → 2 行中文建议 → 明日预告
+//
 // 垂直节奏（共 104px 高）：
-//   y=22  天气图标中心
-//   y=46  紫外线
-//   y=72  温度（24px，即 12px×2）
-//   y=84  右栏明日预告（与温度底部视觉对齐）
+//     y=2    右上角时间胶囊（黑底圆角，12px 高）
+//     y=18   天气图标中心
+//     y=20   建议第 1 行
+//     y=38   紫外线
+//     y=38   建议第 2 行
+//     y=54   温度（24px，即 12px×2）
+//     y=66   右栏分隔线
+//     y=82   温度区间（左）/ 明日预告（右）—— 底行左右对齐
+// ============================================================
 void drawWeatherScene(const char *tempStr, int code,
                       const char *uvStr,
                       const char *advice1, const char *advice2, const char *advice3,
-                      const char *forecastStr) {
+                      const char *forecastStr,
+                      const char *timeStr,
+                      const char *tlowStr, const char *thighStr) {
     // ---------- 分隔线（点状，y=6..98）----------
     for (int y = 6; y < 98; y += 4) {
         setPx(COL_SPLIT_X - 1, y, 1);
         setPx(COL_SPLIT_X - 1, y + 1, 1);
     }
 
-    // ---------- 左栏：图标（水平居中于左栏）----------
-    drawIcon(LEFT_CX, 22, code, 1);
+    // ---------- 右上角：最新更新时间（黑底圆角 + 阴刻白字）----------
+    // "阴刻"= 黑底挖白字：先铺黑矩形，再用 color=0（擦除=白）写数字
+    if (timeStr && timeStr[0]) {
+        const int padX = 3;
+        const int boxH = 12;
+        int tw = timeTextWidth(timeStr);
+        int boxW = tw + padX * 2;
+        int bx = SCR_W - boxW - 3;
+        int by = 2;
+        if (bx < COL_SPLIT_X + 2) bx = COL_SPLIT_X + 2;   // 别压到分隔线
+        fillRoundRect(bx, by, boxW, boxH, 3, 1);           // 黑底
+        // 10px 字形实际落在格的第 2~8 行 → 往下 +1 后视觉居中
+        drawTimeText(bx + padX, by + 1, timeStr, 0);       // 白字
+    }
 
-    // ---------- 左栏：紫外线（图标下方，居中）----------
+    // ---------- 左栏：图标（水平居中）----------
+    drawIcon(LEFT_CX, 18, code, 1);
+
+    // ---------- 左栏：紫外线 ----------
     {
         char uvBuf[12];
         snprintf(uvBuf, sizeof(uvBuf), "UV%s", (uvStr && uvStr[0]) ? uvStr : "-");
         int w = zhTextWidth(uvBuf);
-        drawZhText(LEFT_CX - w / 2, 46, uvBuf, 1);
+        drawZhText(LEFT_CX - w / 2, 38, uvBuf, 1);
     }
 
     // ---------- 左栏：温度 24px（12px × 2，含 °C，居中）----------
@@ -210,23 +283,42 @@ void drawWeatherScene(const char *tempStr, int code,
         int w = zhTextWidth(tBuf) * 2;      // 放大 2 倍后的宽
         int tx = LEFT_CX - w / 2;
         if (tx < 2) tx = 2;
-        drawZhTextScaled(tx, 72, tBuf, 1, 2);
+        drawZhTextScaled(tx, 54, tBuf, 1, 2);
+    }
+
+    // ---------- 左栏：今日温度区间（低~高，最高温用红色强调）----------
+    // 形如 13~20°C。三段分别绘制，以便把"高"单独染红。
+    if (tlowStr && tlowStr[0] && thighStr && thighStr[0]) {
+        char lowBuf[10];
+        snprintf(lowBuf, sizeof(lowBuf), "%s~", tlowStr);
+
+        int wLow  = zhTextWidth(lowBuf);
+        int wHigh = zhTextWidth(thighStr);
+        int wUnit = zhTextWidth("°C");
+        int total = wLow + wHigh + wUnit;
+
+        int rx = LEFT_CX - total / 2;
+        if (rx < 2) rx = 2;
+
+        drawZhText(rx,                    82, lowBuf,    1);   // 13~  黑
+        drawZhText(rx + wLow,             82, thighStr,  2);   // 20   红
+        drawZhText(rx + wLow + wHigh,     82, "°C",      1);   // °C   黑
     }
 
     // ---------- 右栏：建议文字（2 行）----------
-    int ry = 12;
+    int ry = 20;
     const char *lines[2] = { advice1, advice2 };
     for (int i = 0; i < 2; i++) {
         if (lines[i] && lines[i][0]) {
             drawZhText(RIGHT_PAD_X, ry, lines[i], 1);
-            ry += ZH_CELL_H + 10;
+            ry += 18;      // 行距 18px（12px 字 + 6px 间隔）
         }
     }
 
     // ---------- 右栏底部：明日预告 ----------
     // forecastStr 由调用方拼好（含"明日"前缀），这里不再加，否则会重复两次
     if (forecastStr && forecastStr[0]) {
-        drawLine(RIGHT_PAD_X, 68, RIGHT_PAD_X + 112, 68, 1);
-        drawZhText(RIGHT_PAD_X, 84, forecastStr, 1);
+        drawLine(RIGHT_PAD_X, 66, RIGHT_PAD_X + 112, 66, 1);
+        drawZhText(RIGHT_PAD_X, 82, forecastStr, 1);
     }
 }

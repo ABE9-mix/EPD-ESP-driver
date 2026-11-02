@@ -38,7 +38,17 @@ void drawZhChar(int x, int y, uint32_t cp, int color);      // 单个字符
 void drawZhText(int x, int y, const char *utf8, int color); // UTF-8 字符串（按字宽推进）
 void drawZhTextScaled(int x, int y, const char *utf8, int color, int scale); // 带倍率
 int  zhTextWidth(const char *utf8);                          // 计算像素宽
+
+// 圆角矩形填充（像素风 45° 切角，r 建议 2~3）
+void fillRoundRect(int x, int y, int w, int h, int r, int color);
+
+// 10px 时间数字（仅 0-9 与冒号），用于右上角"最新更新时间"
+void drawTimeText(int x, int y, const char *s, int color);
+int  timeTextWidth(const char *s);
+
 void drawWeatherScene(const char *tempStr, int code,
                       const char *uvStr,
                       const char *advice1, const char *advice2, const char *advice3,
-                      const char *forecastStr);
+                      const char *forecastStr,
+                      const char *timeStr,
+                      const char *tlowStr, const char *thighStr);
