@@ -187,29 +187,36 @@ def fetch_weather(client: httpx.Client, lat: float, lon: float) -> dict:
 
 
 def _rain_in_hours(wx: dict) -> int | None:
-    """判断未来几小时会下雨。返回小时数（1~9），已在雨里返回 0，否则 None。"""
+    """判断未来几小时会下雨。
+
+    返回 0 表示「正在下雨」，1~9 表示 N 小时后开始下，None 表示近期不下。
+
+    ★ 关键：判断「当前是否在下雨」必须用 current（实况），不能用
+      hourly[当前小时]。后者是「该小时的主导天气」，雨下到一半时
+      那一格可能还标着多云，于是会误报成「1 小时后有雨」。
+    """
     hourly = wx.get("hourly") or {}
     codes = hourly.get("weather_code") or []
     probs = hourly.get("precipitation_probability") or []
     times = hourly.get("time") or []
-    if not codes or not times:
-        return None
 
-    # 找到"当前小时"在 hourly 里的位置
-    now_key = time.strftime("%Y-%m-%dT%H:00", time.localtime())
-    idx = None
-    for i, t in enumerate(times):
-        if str(t) == now_key:
-            idx = i
-            break
-    if idx is None:
-        # 时区/日期对不上时退化：取第一个
-        idx = 0
-
-    cur_code = codes[idx] if idx < len(codes) else None
+    # ① 实况优先：current 是当前时刻的真实观测
+    cur_code = (wx.get("current") or {}).get("weather_code")
     if cur_code in RAIN_CODES:
         return 0
 
+    if not codes or not times:
+        return None
+
+    # ② 定位当前小时在 hourly 里的下标
+    now_key = time.strftime("%Y-%m-%dT%H:00", time.localtime())
+    idx = times.index(now_key) if now_key in times else None
+    if idx is None:
+        # 时区/时间对不上时不猜（原来退化到 0 会拿 00:00 往后找，结果完全错）
+        log.debug("hourly 中找不到当前小时 %s，跳过降雨预判", now_key)
+        return None
+
+    # ③ 往后找第一个降雨小时
     for step in range(1, 10):
         j = idx + step
         if j >= len(codes) or j >= len(probs):
@@ -270,6 +277,19 @@ def build_payload(wx: dict) -> dict:
         rain_in = _rain_in_hours(wx)
         uv_val = _safe_int(cur.get("uv_index")) or 0
         wind = cur.get("wind_speed_10m")
+
+        # 降雨判定的诊断：把实况和 hourly 当前格一起打出来，
+        # 以后"明明在下雨却说 1 小时后"一眼就能看出是哪边的问题
+        _hc = (wx.get("hourly") or {}).get("weather_code") or []
+        _ht = (wx.get("hourly") or {}).get("time") or []
+        _now_key = time.strftime("%Y-%m-%dT%H:00", time.localtime())
+        _hi = _ht.index(_now_key) if _now_key in _ht else -1
+        log.debug("降雨判定：current=%s(%s)  hourly[%d]=%s  结果=%s",
+                  cur.get("weather_code"), _desc(cur.get("weather_code")),
+                  _hi,
+                  _hc[_hi] if 0 <= _hi < len(_hc) else "N/A",
+                  "正在下" if rain_in == 0 else (f"{rain_in}小时后" if rain_in else "无雨"))
+
         lines = _adv.build_advice({
             "rain_in_hours": rain_in,
             "uv": uv_val,
