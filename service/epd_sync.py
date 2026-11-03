@@ -79,7 +79,25 @@ WMO_ICON = {
 }
 
 # 哪些 WMO 码算"下雨/下雪"（用于"几小时后有雨"判断）
-RAIN_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99}
+# Open-Meteo 的 WMO 天气代码，按「现象」分组
+# 注意：原来只分了一个 RAIN_CODES 且混入了雷暴码，导致
+#   ① 下雪时不被识别 → 误报"天气不错"
+#   ② 雾霾天没有任何提示
+# 现在拆开分别判断。
+RAIN_CODES = {
+    51, 53, 55,          # 毛毛雨 轻/中/密
+    56, 57,              # 冻毛毛雨
+    61, 63, 65,          # 雨 小/中/大
+    66, 67,              # 冻雨
+    80, 81, 82,          # 阵雨 小/中/大
+}
+SNOW_CODES = {
+    71, 73, 75,          # 雪 小/中/大
+    77,                  # 雪粒
+    85, 86,              # 阵雪 小/大
+}
+FOG_CODES = {45, 48}     # 雾 / 雾凇
+THUNDER_CODES = {95, 96, 99}   # 雷暴 / 雷暴伴冰雹
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -186,44 +204,77 @@ def fetch_weather(client: httpx.Client, lat: float, lon: float) -> dict:
     return r.json()
 
 
-def _rain_in_hours(wx: dict) -> int | None:
-    """判断未来几小时会下雨。
+def _now_kind(cur_code) -> str | None:
+    """当前天气现象分类：thunder / rain / snow / fog / None。
 
-    返回 0 表示「正在下雨」，1~9 表示 N 小时后开始下，None 表示近期不下。
+    顺序有意把雷暴排在最前——雷暴常伴随降雨，按雨处理会弱化提示。
+    """
+    if cur_code in THUNDER_CODES:
+        return "thunder"
+    if cur_code in RAIN_CODES:
+        return "rain"
+    if cur_code in SNOW_CODES:
+        return "snow"
+    if cur_code in FOG_CODES:
+        return "fog"
+    return None
 
-    ★ 关键：判断「当前是否在下雨」必须用 current（实况），不能用
-      hourly[当前小时]。后者是「该小时的主导天气」，雨下到一半时
-      那一格可能还标着多云，于是会误报成「1 小时后有雨」。
+
+def _precip_in_hours(wx: dict) -> tuple[str | None, int | None]:
+    """判断降水类型与时间。
+
+    返回 (kind, hours)：
+        kind  : 'rain' | 'snow' | None
+        hours : 0=正在下，1~9=N 小时后开始，None=近期无
+
+    ★ 判断「当前是否在下」必须用 current（实况），不能用 hourly[当前小时]。
+      后者是「该小时的主导天气」，雨下到一半时那一格可能还标着多云，
+      会误报成「1 小时后有雨」。
     """
     hourly = wx.get("hourly") or {}
     codes = hourly.get("weather_code") or []
     probs = hourly.get("precipitation_probability") or []
     times = hourly.get("time") or []
 
-    # ① 实况优先：current 是当前时刻的真实观测
+    # ① 实况优先
     cur_code = (wx.get("current") or {}).get("weather_code")
-    if cur_code in RAIN_CODES:
-        return 0
+    cur_kind = _now_kind(cur_code)
+    if cur_kind in ("rain", "snow"):
+        return cur_kind, 0
+    if cur_kind == "thunder":
+        # 雷暴也按降水处理，让第 2 行能提醒带伞
+        return "rain", 0
 
     if not codes or not times:
-        return None
+        return None, None
 
-    # ② 定位当前小时在 hourly 里的下标
+    # ② 定位当前小时
     now_key = time.strftime("%Y-%m-%dT%H:00", time.localtime())
     idx = times.index(now_key) if now_key in times else None
     if idx is None:
-        # 时区/时间对不上时不猜（原来退化到 0 会拿 00:00 往后找，结果完全错）
-        log.debug("hourly 中找不到当前小时 %s，跳过降雨预判", now_key)
-        return None
+        log.debug("hourly 中找不到当前小时 %s，跳过降水预判", now_key)
+        return None, None
 
-    # ③ 往后找第一个降雨小时
+    # ③ 往后找第一个降水小时
     for step in range(1, 10):
         j = idx + step
         if j >= len(codes) or j >= len(probs):
             break
-        if codes[j] in RAIN_CODES or (isinstance(probs[j], (int, float)) and probs[j] >= 60):
-            return step
-    return None
+        c = codes[j]
+        if c in SNOW_CODES:
+            return "snow", step
+        if c in RAIN_CODES or c in THUNDER_CODES:
+            return "rain", step
+        if isinstance(probs[j], (int, float)) and probs[j] >= 60:
+            # 只有概率没有明确码：按雨算（概率高时带伞总没错）
+            return "rain", step
+    return None, None
+
+
+# 兼容旧名（测试脚本可能还在用）
+def _rain_in_hours(wx: dict) -> int | None:
+    kind, hours = _precip_in_hours(wx)
+    return hours if kind else None
 
 
 def build_payload(wx: dict) -> dict:
@@ -274,24 +325,27 @@ def build_payload(wx: dict) -> dict:
     # ---------- v4：中文建议（右栏）----------
     try:
         import advice as _adv
-        rain_in = _rain_in_hours(wx)
+        precip_kind, precip_in = _precip_in_hours(wx)
+        now_kind = _now_kind(cur.get("weather_code"))
         uv_val = _safe_int(cur.get("uv_index")) or 0
         wind = cur.get("wind_speed_10m")
 
-        # 降雨判定的诊断：把实况和 hourly 当前格一起打出来，
-        # 以后"明明在下雨却说 1 小时后"一眼就能看出是哪边的问题
+        # 降水/现象判定的诊断：实况和 hourly 当前格一起打，
+        # 以后"明明在下雨却说 1 小时后"一眼能看出是哪边的问题
         _hc = (wx.get("hourly") or {}).get("weather_code") or []
         _ht = (wx.get("hourly") or {}).get("time") or []
         _now_key = time.strftime("%Y-%m-%dT%H:00", time.localtime())
         _hi = _ht.index(_now_key) if _now_key in _ht else -1
-        log.debug("降雨判定：current=%s(%s)  hourly[%d]=%s  结果=%s",
+        log.debug("天气判定：current=%s(%s) 现象=%s  hourly[%d]=%s  降水=%s/%s",
                   cur.get("weather_code"), _desc(cur.get("weather_code")),
-                  _hi,
-                  _hc[_hi] if 0 <= _hi < len(_hc) else "N/A",
-                  "正在下" if rain_in == 0 else (f"{rain_in}小时后" if rain_in else "无雨"))
+                  now_kind or "-",
+                  _hi, _hc[_hi] if 0 <= _hi < len(_hc) else "N/A",
+                  precip_kind or "-", precip_in)
 
         lines = _adv.build_advice({
-            "rain_in_hours": rain_in,
+            "now_kind": now_kind,
+            "precip_kind": precip_kind,
+            "precip_in": precip_in,
             "uv": uv_val,
             "temp": p.get("temp"),
             "thigh": p.get("thigh"),

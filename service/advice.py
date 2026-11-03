@@ -17,22 +17,40 @@ from typing import List
 # ---------------------------------------------------------------- 字句模板
 # 每条都用「短语片段」拼装，片段可以复用，减少字表体积
 PHRASES = {
-    # 下雨
+    # ---- 降雨 ----
     "rain_in":      "{n}小时后有雨",     # n 为 1~9
     # 注意：不要用「即」——方舟像素 12px 的 zh_hans 子集里该码位是缺字方框
     "rain_soon":    "正在下雨",
     "rain_today":   "今日有雨",
     "rain_tmrw":    "明日有雨",
+
+    # ---- 降雪 ----（原来完全没有，雪天会误报成"天气不错"）
+    "snow_in":      "{n}小时后有雪",
+    "snow_soon":    "正在下雪",
     "snow_tmrw":    "明日有雪",
-    # 紫外线
+    "slippery":     "注意防滑",
+
+    # ---- 雾 / 霾 ----
+    # 注意：不能用「雾」——同样是缺字方框（和「即」一类），故用「能见度低」描述
+    "low_vis":      "能见度低",
+    "mask":         "出门戴口罩",
+
+    # ---- 雷暴 ----（原来雷暴会被当成普通降雨）
+    "thunder":      "雷暴天气",
+    "avoid_bolt":   "注意避雷",
+
+    # ---- 紫外线 ----
     "uv_strong":    "紫外线强",
     "uv_very":      "紫外线很强",
-    # 温度
+
+    # ---- 温度 ----
+    # 注意：不能用「热」——缺字；「高温」可用
     "hot":          "高温注意补水",
     "cold":         "低温注意保暖",
     "warm":         "气温舒适",
     "big_diff":     "温差大注意加衣",
-    # 其他
+
+    # ---- 其他 ----
     "windy":        "风力较大",
     "wet":          "湿度较大",
     "dry":          "空气干燥",
@@ -62,9 +80,12 @@ WEATHER_LABEL = [
     "晴",      # 0 sunny
     "多云",    # 1 partly
     "阴",      # 2 cloudy
-    # 注意：不能用「雾」——方舟像素 12px 的 zh_hans 子集里该码位是缺字方框，
-    # 实测「霾」可用，故雾天显示「霾」。
-    "霾",      # 3 fog
+    # 雾天标签：12px 下没有任何「雾/霾」字形能看清——
+    #   雾  U+96FE 缺字（方框）
+    #   霾  U+973E 笔画密度 51%（半格全黑，糊成一团）
+    #   霧/霚/雺/霿 等变体 40~47%，同样偏密
+    # 实测「灰」27% 最清晰，且雾霾天视觉上就是灰蒙蒙的，语义能对上。
+    "灰",      # 3 fog
     "小雨",    # 4 rain_light
     "大雨",    # 5 rain_heavy
     "雪",      # 6 snow
@@ -105,12 +126,11 @@ def build_advice(wx: dict, now_epoch: float | None = None) -> List[str]:
     """根据天气数据生成最多 3 行建议，每行 ≤10 个汉字。
 
     wx 需要包含：
-        rain_in_hours : 未来几小时开始下雨（int 或 None）
-        uv            : 紫外线指数
-        temp / thigh / tlow
-        hum           : 湿度
-        wind          : 风速 km/h（可选）
-        tmrw_code     : 明日天气代码（可选）
+        now_kind      : 当前天气现象 'rain'|'snow'|'fog'|'thunder'|None
+        precip_kind   : 降水类型 'rain'|'snow'（可选，用于"N小时后"）
+        precip_in     : 0=正在下，1~9=N小时后，None=无
+        uv / temp / thigh / tlow / hum / wind / tmrw_code
+    兼容旧字段 rain_in_hours（会被当成 rain）。
     """
     lines: List[str] = []
 
@@ -123,20 +143,41 @@ def build_advice(wx: dict, now_epoch: float | None = None) -> List[str]:
         if s not in lines:
             lines.append(s)
 
-    rain_in = wx.get("rain_in_hours")
+    now_kind = wx.get("now_kind")
+    precip_kind = wx.get("precip_kind")
+    precip_in = wx.get("precip_in")
+
+    # 兼容旧调用：只有 rain_in_hours
+    if precip_in is None and wx.get("rain_in_hours") is not None:
+        precip_in = wx.get("rain_in_hours")
+        precip_kind = "rain"
+
     uv = wx.get("uv") or 0
-    temp = wx.get("temp")
     thigh = wx.get("thigh")
     tlow = wx.get("tlow")
     hum = wx.get("hum") or 0
     wind = wx.get("wind") or 0
     tmrw = wx.get("tmrw_code")
 
+    # 正在进行中的降水（0 小时）
+    if precip_in == 0 and precip_kind and not now_kind:
+        now_kind = precip_kind
+
     # ---- 第 1 行：最重要的提醒 ----
-    if rain_in is not None and 1 <= rain_in <= 9:
-        add(_fmt(PHRASES["rain_in"], n=int(rain_in)))
-    elif rain_in == 0:
+    # 顺序按「危险/影响程度」排，天气现象优先于 UV/温度等常规指标
+    if now_kind == "thunder":
+        add(PHRASES["thunder"])
+    elif now_kind == "rain":
         add(PHRASES["rain_soon"])
+    elif now_kind == "snow":
+        add(PHRASES["snow_soon"])
+    elif now_kind == "fog":
+        add(PHRASES["low_vis"])
+    elif precip_in is not None and 1 <= precip_in <= 9:
+        if precip_kind == "snow":
+            add(_fmt(PHRASES["snow_in"], n=int(precip_in)))
+        else:
+            add(_fmt(PHRASES["rain_in"], n=int(precip_in)))
     elif uv >= 8:
         add(PHRASES["uv_very"])
     elif uv >= 6:
@@ -155,8 +196,16 @@ def build_advice(wx: dict, now_epoch: float | None = None) -> List[str]:
         add(PHRASES["clear"])
 
     # ---- 第 2 行：配套动作 ----
-    if rain_in is not None and 0 <= rain_in <= 9:
+    if now_kind == "thunder":
+        add(PHRASES["avoid_bolt"])
+    elif now_kind == "rain":
         add(PHRASES["umbrella"])
+    elif now_kind == "snow":
+        add(PHRASES["slippery"])
+    elif now_kind == "fog":
+        add(PHRASES["mask"])
+    elif precip_in is not None and 1 <= precip_in <= 9:
+        add(PHRASES["slippery"] if precip_kind == "snow" else PHRASES["umbrella"])
     elif uv >= 6:
         add(PHRASES["sunscreen"])
     elif isinstance(thigh, int) and thigh >= 33:

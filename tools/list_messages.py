@@ -24,20 +24,25 @@ def main() -> int:
     print("二、右栏第 1 行（最重要提醒）候选")
     print("=" * 66)
 
-    # 枚举第 1 行的所有分支
-    row1 = []
+    row1 = [
+        ("雷暴（实况）",     A.PHRASES["thunder"]),
+        ("正在下雨（实况）", A.PHRASES["rain_soon"]),
+        ("正在下雪（实况）", A.PHRASES["snow_soon"]),
+        ("雾霾（实况）",     A.PHRASES["low_vis"]),
+    ]
     for n in range(1, 10):
         row1.append((f"雨在 {n} 小时后", A.PHRASES["rain_in"].format(n=n)))
+    for n in range(1, 10):
+        row1.append((f"雪在 {n} 小时后", A.PHRASES["snow_in"].format(n=n)))
     row1 += [
-        ("正在下雨",       A.PHRASES["rain_soon"]),
-        ("UV ≥ 8",        A.PHRASES["uv_very"]),
-        ("UV 6~7",        A.PHRASES["uv_strong"]),
-        ("最高温 ≥ 33",    A.PHRASES["hot"]),
-        ("最低温 ≤ 2",     A.PHRASES["cold"]),
-        ("风速 ≥ 30",     A.PHRASES["windy"]),
-        ("湿度 ≥ 85",     A.PHRASES["wet"]),
-        ("湿度 ≤ 25",     A.PHRASES["dry"]),
-        ("其他",          A.PHRASES["clear"]),
+        ("UV ≥ 8",       A.PHRASES["uv_very"]),
+        ("UV 6~7",       A.PHRASES["uv_strong"]),
+        ("最高温 ≥ 33",   A.PHRASES["hot"]),
+        ("最低温 ≤ 2",    A.PHRASES["cold"]),
+        ("风速 ≥ 30",    A.PHRASES["windy"]),
+        ("湿度 ≥ 85",    A.PHRASES["wet"]),
+        ("湿度 ≤ 25",    A.PHRASES["dry"]),
+        ("其他",         A.PHRASES["clear"]),
     ]
     for cond, text in row1:
         print(f"  {cond:<16} → {text}")
@@ -48,7 +53,12 @@ def main() -> int:
     print("三、右栏第 2 行（配套动作）候选")
     print("=" * 66)
     row2 = [
-        ("有雨（0~9h）",   A.PHRASES["umbrella"]),
+        ("雷暴",          A.PHRASES["avoid_bolt"]),
+        ("正在下雨",       A.PHRASES["umbrella"]),
+        ("正在下雪",       A.PHRASES["slippery"]),
+        ("雾霾",          A.PHRASES["mask"]),
+        ("未来有雨",       A.PHRASES["umbrella"]),
+        ("未来有雪",       A.PHRASES["slippery"]),
         ("UV ≥ 6",        A.PHRASES["sunscreen"]),
         ("最高温 ≥ 33",    A.PHRASES["water"]),
         ("最低温 ≤ 2",     A.PHRASES["extra"]),
@@ -56,9 +66,13 @@ def main() -> int:
         ("温差 ≥ 12",     A.PHRASES["big_diff"]),
         ("其他",          A.PHRASES["outside"]),
     ]
+    shown = []
     for cond, text in row2:
+        if text in shown:
+            continue
+        shown.append(text)
         print(f"  {cond:<16} → {text}")
-    print(f"  小计：{len(row2)} 种")
+    print(f"  小计：{len(shown)} 种（去重后）")
 
     print()
     print("=" * 66)
@@ -78,8 +92,14 @@ def main() -> int:
     print("五、定义了但从未被触发（死代码）")
     print("=" * 66)
     used = {
-        "rain_in", "rain_soon", "rain_tmrw", "snow_tmrw",
+        # 降水
+        "rain_in", "rain_soon", "rain_tmrw",
+        "snow_in", "snow_soon", "snow_tmrw", "slippery",
+        # 雾霾 / 雷暴
+        "low_vis", "mask", "thunder", "avoid_bolt",
+        # 紫外线 / 温度
         "uv_strong", "uv_very", "hot", "cold", "big_diff",
+        # 环境 / 通用
         "windy", "wet", "dry", "clear", "outside",
         "umbrella", "sunscreen", "water", "windproof", "extra",
     }

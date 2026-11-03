@@ -151,9 +151,10 @@ static uint8_t iconIdFor(int code) {
 }
 
 // 图标下方显示的当前天气文字（顺序与 icons.h 的 id 一一对应）
-// 注：fog 用「霾」——「雾」在方舟像素 12px 子集里是缺字方框
+// 注：fog 用「灰」——「雾」缺字，「霾」笔画密度 51% 在 12px 下糊成一团，
+//     实测「灰」(27%) 最清晰，且雾霾天视觉上就是灰蒙蒙的。
 static const char *const ICON_LABEL[ICON_COUNT] = {
-    "晴", "多云", "阴", "霾", "小雨", "大雨", "雪", "雷阵雨"
+    "晴", "多云", "阴", "灰", "小雨", "大雨", "雪", "雷阵雨"
 };
 
 static void drawIcon(int cx, int cy, int code, int color) {
